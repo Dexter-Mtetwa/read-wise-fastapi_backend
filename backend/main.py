@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import uuid
@@ -6,10 +7,20 @@ import time
 from dotenv import load_dotenv
 from services import store, parser, ai
 from services.database import init_db
+from services.auth import get_current_user_id
 
 load_dotenv()
 
 app = FastAPI(title="ReadWise API")
+
+# CORS Configuration - Allow frontend to make requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with your actual frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 def on_startup():
@@ -50,7 +61,7 @@ async def health_check():
 
 
 # Enhanced background task to process book with chapter-level and book-level analysis
-def process_book_background(book_id: str, chapters_data: list, book_title: str):
+def process_book_background(book_id: str, chapters_data: list, book_title: str, owner_id: Optional[str] = None):
     """
     Background task to process all chapters and generate book-level overview.
     Steps:
@@ -79,6 +90,7 @@ def process_book_background(book_id: str, chapters_data: list, book_title: str):
             store.create_chapter({
                 "id": chapter_id,
                 "book_id": book_id,
+                "owner_id": owner_id,
                 "chapter_index": chapter_data['index'],
                 "title": chapter_title,
                 "text": chapter_text,
@@ -106,7 +118,11 @@ def process_book_background(book_id: str, chapters_data: list, book_title: str):
 
 # API endpoint to upload a book
 @app.post("/books", response_model=Book)
-async def upload_book(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_book(
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(...),
+    current_user_id: str = Depends(get_current_user_id)
+):
     """
     Upload a PDF/EPUB file, parse it into chapters, and trigger AI processing.
     Returns immediately with 'processing' status.
@@ -126,6 +142,7 @@ async def upload_book(background_tasks: BackgroundTasks, file: UploadFile = File
         "id": book_id,
         "title": file.filename,
         "status": "processing",
+        "owner_id": current_user_id,
         "chapter_count": len(chapters_data),
         "overview_summary": None,
         "overview_key_points": None,
@@ -133,7 +150,7 @@ async def upload_book(background_tasks: BackgroundTasks, file: UploadFile = File
     })
     
     # Trigger background task for comprehensive processing
-    background_tasks.add_task(process_book_background, book_id, chapters_data, file.filename)
+    background_tasks.add_task(process_book_background, book_id, chapters_data, file.filename, current_user_id)
     
     # Return book info (convert SQLAlchemy model/dict to response model)
     # store.create_book returns the Book object, we can return it directly or convert to dict

@@ -4,6 +4,10 @@ from services.database import SessionLocal
 from typing import List, Optional, Dict, Any
 import json
 
+"""
+
+"""
+
 # Helper to get DB session
 def get_db():
     db = SessionLocal()
@@ -24,6 +28,7 @@ def create_book(book_data: Dict[str, Any]) -> Book:
             id=book_data.get("id"),
             title=book_data.get("title"),
             status=book_data.get("status", "processing"),
+            owner_id=book_data.get("owner_id"),
             chapter_count=book_data.get("chapter_count", 0),
             overview_summary=book_data.get("overview_summary"),
             overview_key_points=book_data.get("overview_key_points"),
@@ -96,6 +101,7 @@ def create_chapter(chapter_data: Dict[str, Any]):
         new_chapter = Chapter(
             id=chapter_data.get("id"),
             book_id=chapter_data.get("book_id"),
+            owner_id=chapter_data.get("owner_id"),
             chapter_index=chapter_data.get("chapter_index"),
             title=chapter_data.get("title"),
             text=chapter_data.get("text"),
@@ -150,6 +156,7 @@ def _book_to_dict(book: Book) -> Dict[str, Any]:
         "id": book.id,
         "title": book.title,
         "status": book.status,
+        "owner_id": str(book.owner_id) if book.owner_id else None,
         "chapter_count": book.chapter_count,
         "overview_summary": book.overview_summary,
         "overview_key_points": book.overview_key_points,
@@ -161,6 +168,7 @@ def _chapter_to_dict(chapter: Chapter) -> Dict[str, Any]:
     return {
         "id": chapter.id,
         "book_id": chapter.book_id,
+        "owner_id": str(chapter.owner_id) if chapter.owner_id else None,
         "chapter_index": chapter.chapter_index,
         "title": chapter.title,
         "text": chapter.text,
