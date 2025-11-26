@@ -5,10 +5,15 @@ import uuid
 import time
 from dotenv import load_dotenv
 from services import store, parser, ai
+from services.database import init_db
 
 load_dotenv()
 
 app = FastAPI(title="ReadWise API")
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 # Pydantic models
 class Book(BaseModel):
@@ -70,8 +75,8 @@ def process_book_background(book_id: str, chapters_data: list, book_title: str):
             # Process chapter with AI
             chapter_result = ai.process_chapter(chapter_text, chapter_title)
             
-            # Store chapter in memory
-            store.chapters[chapter_id] = {
+            # Store chapter in database
+            store.create_chapter({
                 "id": chapter_id,
                 "book_id": book_id,
                 "chapter_index": chapter_data['index'],
@@ -80,24 +85,24 @@ def process_book_background(book_id: str, chapters_data: list, book_title: str):
                 "summary": chapter_result.get("summary"),
                 "key_points": chapter_result.get("key_points", []),
                 "questions": chapter_result.get("questions", [])
-            }
+            })
         
         # Step 3: Generate book-level overview
         print(f"Generating book-level overview for {book_title}")
         book_result = ai.process_book_overview(full_text, book_title)
         
         # Step 4: Update book with overview and mark as completed
-        if book_id in store.books:
-            store.books[book_id]["overview_summary"] = book_result.get("overview_summary")
-            store.books[book_id]["overview_key_points"] = book_result.get("overview_key_points", [])
-            store.books[book_id]["overview_questions"] = book_result.get("overview_questions", [])
-            store.books[book_id]["status"] = "completed"
+        store.update_book(book_id, {
+            "overview_summary": book_result.get("overview_summary"),
+            "overview_key_points": book_result.get("overview_key_points", []),
+            "overview_questions": book_result.get("overview_questions", []),
+            "status": "completed"
+        })
         
         print(f"Finished background processing for book {book_id}")
     except Exception as e:
         print(f"Error in background processing for book {book_id}: {e}")
-        if book_id in store.books:
-            store.books[book_id]["status"] = "error"
+        store.update_book(book_id, {"status": "error"})
 
 # API endpoint to upload a book
 @app.post("/books", response_model=Book)
@@ -116,27 +121,30 @@ async def upload_book(background_tasks: BackgroundTasks, file: UploadFile = File
     
     book_id = str(uuid.uuid4())
     
-    # Store book in memory with initial state
-    store.books[book_id] = {
+    # Store book in database with initial state
+    new_book = store.create_book({
         "id": book_id,
         "title": file.filename,
         "status": "processing",
-        "created_at": time.time(),
         "chapter_count": len(chapters_data),
         "overview_summary": None,
         "overview_key_points": None,
         "overview_questions": None
-    }
+    })
     
     # Trigger background task for comprehensive processing
     background_tasks.add_task(process_book_background, book_id, chapters_data, file.filename)
     
-    # Return book info
+    # Return book info (convert SQLAlchemy model/dict to response model)
+    # store.create_book returns the Book object, we can return it directly or convert to dict
     return {
-        "id": book_id,
-        "title": file.filename,
-        "status": "processing",
-        "chapter_count": len(chapters_data)
+        "id": new_book.id,
+        "title": new_book.title,
+        "status": new_book.status,
+        "chapter_count": new_book.chapter_count,
+        "overview_summary": new_book.overview_summary,
+        "overview_key_points": new_book.overview_key_points,
+        "overview_questions": new_book.overview_questions
     }
 
 # API endpoint to list all books
@@ -145,18 +153,9 @@ async def list_books():
     """
     List all uploaded books with their overview data.
     """
-    return [
-        {
-            "id": b["id"],
-            "title": b["title"],
-            "status": b["status"],
-            "chapter_count": b.get("chapter_count", 0),
-            "overview_summary": b.get("overview_summary"),
-            "overview_key_points": b.get("overview_key_points"),
-            "overview_questions": b.get("overview_questions")
-        }
-        for b in store.books.values()
-    ]
+    books_dict = store.get_all_books()
+    # books_dict is {id: dict}
+    return list(books_dict.values())
 
 # API endpoint to delete a book
 @app.delete("/books/{book_id}")
@@ -164,19 +163,9 @@ async def delete_book(book_id: str):
     """
     Delete a book and all its chapters.
     """
-    if book_id not in store.books:
+    success = store.delete_book(book_id)
+    if not success:
         raise HTTPException(status_code=404, detail="Book not found")
-    
-    # Delete the book
-    del store.books[book_id]
-    
-    # Delete all associated chapters
-    chapter_ids_to_delete = [
-        ch_id for ch_id, ch in store.chapters.items()
-        if ch.get("book_id") == book_id
-    ]
-    for ch_id in chapter_ids_to_delete:
-        del store.chapters[ch_id]
     
     return {"status": "deleted"}
 
@@ -186,19 +175,11 @@ async def get_book(book_id: str):
     """
     Get detailed information about a specific book including overview data.
     """
-    if book_id not in store.books:
+    book = store.get_book(book_id)
+    if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     
-    book = store.books[book_id]
-    return {
-        "id": book["id"],
-        "title": book["title"],
-        "status": book["status"],
-        "chapter_count": book.get("chapter_count", 0),
-        "overview_summary": book.get("overview_summary"),
-        "overview_key_points": book.get("overview_key_points"),
-        "overview_questions": book.get("overview_questions")
-    }
+    return book
 
 # API endpoint to get all chapters of a book
 @app.get("/books/{book_id}/chapters", response_model=List[Chapter])
@@ -207,28 +188,11 @@ async def get_book_chapters(book_id: str):
     Get all chapters for a book with their summaries, key points, and questions.
     Does not include the full chapter text.
     """
-    if book_id not in store.books:
+    # Check if book exists first
+    if not store.get_book(book_id):
         raise HTTPException(status_code=404, detail="Book not found")
     
-    # Get all chapters for this book
-    book_chapters = [
-        {
-            "id": ch["id"],
-            "book_id": ch["book_id"],
-            "chapter_index": ch["chapter_index"],
-            "title": ch["title"],
-            "summary": ch.get("summary"),
-            "key_points": ch.get("key_points"),
-            "questions": ch.get("questions")
-        }
-        for ch in store.chapters.values()
-        if ch.get("book_id") == book_id
-    ]
-    
-    # Sort by chapter index
-    book_chapters.sort(key=lambda x: x["chapter_index"])
-    
-    return book_chapters
+    return store.get_book_chapters(book_id)
 
 # API endpoint to get a specific chapter with full text
 @app.get("/books/{book_id}/chapters/{chapter_index}", response_model=ChapterDetail)
@@ -236,23 +200,14 @@ async def get_chapter_detail(book_id: str, chapter_index: int):
     """
     Get full details for a specific chapter including the chapter text.
     """
-    if book_id not in store.books:
+    if not store.get_book(book_id):
         raise HTTPException(status_code=404, detail="Book not found")
     
     # Find the chapter
     chapter_id = f"{book_id}_chapter_{chapter_index}"
+    chapter = store.get_chapter(chapter_id)
     
-    if chapter_id not in store.chapters:
+    if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
     
-    chapter = store.chapters[chapter_id]
-    return {
-        "id": chapter["id"],
-        "book_id": chapter["book_id"],
-        "chapter_index": chapter["chapter_index"],
-        "title": chapter["title"],
-        "text": chapter["text"],
-        "summary": chapter.get("summary"),
-        "key_points": chapter.get("key_points"),
-        "questions": chapter.get("questions")
-    }
+    return chapter
