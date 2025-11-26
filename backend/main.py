@@ -17,6 +17,8 @@ class Book(BaseModel):
     status: str
     chapter_count: int = 0
     summary: Optional[str] = None
+    key_points: Optional[str] = None
+    questions: Optional[str] = None
 
 @app.get("/health")
 async def health_check():
@@ -31,8 +33,13 @@ def process_book_background(book_id: str, text: str):
 
     print(f"Starting background processing for book {book_id}")
     summary = ai.generate_summary(text)
+    key_points = ai.generate_key_points(text)
+    questions = ai.generate_questions(text)
+    
     if book_id in store.books:
         store.books[book_id]["summary"] = summary
+        store.books[book_id]["key_points"] = key_points
+        store.books[book_id]["questions"] = questions
         store.books[book_id]["status"] = "completed"
     print(f"Finished background processing for book {book_id}")
 
@@ -62,7 +69,11 @@ async def upload_book(background_tasks: BackgroundTasks, file: UploadFile = File
         "content": text,
         "chapters": chapters,
         "created_at": time.time(),
-        "summary": None
+        "chapters": chapters,
+        "created_at": time.time(),
+        "summary": None,
+        "key_points": None,
+        "questions": None
     }
     
     # Trigger background task
@@ -77,6 +88,32 @@ async def upload_book(background_tasks: BackgroundTasks, file: UploadFile = File
     }
 
 # API endpoint to get a book
+@app.get("/books", response_model=List[Book])
+async def list_books():
+    """
+    List all uploaded books.
+    """
+    return [
+        {
+            "id": b["id"],
+            "title": b["title"],
+            "status": b["status"],
+            "chapter_count": len(b["chapters"]),
+            "summary": b.get("summary"),
+            "key_points": b.get("key_points"),
+            "questions": b.get("questions")
+        }
+        for b in store.books.values()
+    ]
+
+@app.delete("/books/{book_id}")
+async def delete_book(book_id: str):
+    if book_id not in store.books:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    del store.books[book_id]
+    return {"status": "deleted"}
+
 @app.get("/books/{book_id}", response_model=Book)
 async def get_book(book_id: str):
     if book_id not in store.books:
@@ -88,7 +125,9 @@ async def get_book(book_id: str):
         "title": book["title"],
         "status": book["status"],
         "chapter_count": len(book["chapters"]),
-        "summary": book.get("summary")
+        "summary": book.get("summary"),
+        "key_points": book.get("key_points"),
+        "questions": book.get("questions")
     }
 
 @app.get("/books/{book_id}/chapters")

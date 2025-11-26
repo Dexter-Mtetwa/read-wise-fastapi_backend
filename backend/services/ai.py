@@ -31,3 +31,45 @@ def generate_summary(text: str) -> str:
     except Exception as e:
         print(f"Error generating summary: {e}")
         return "Error generating summary."
+
+def generate_key_points(text: str) -> str:
+    """
+    Extract key points from the text.
+    """
+    client = get_client()
+    if not client:
+        return "AI Client not configured."
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that extracts key points from text."},
+                {"role": "user", "content": f"Extract 3-5 key points from the following text:\n\n{text[:2000]}"}
+            ]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Error generating key points: {e}")
+        return "Error generating key points."
+
+def generate_questions(text: str) -> str:
+    """
+    Generate discussion questions from the text.
+    """
+    client = get_client()
+    if not client:
+        return "AI Client not configured."
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that generates discussion questions."},
+                {"role": "user", "content": f"Generate 3 thought-provoking discussion questions based on the following text:\n\n{text[:2000]}"}
+            ]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Error generating questions: {e}")
+        return "Error generating questions."
