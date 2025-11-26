@@ -17,6 +17,3 @@ env/
 
 # Project specific
 backend/test.pdf
-book_level_prompt.md
-chapter_level_prompt.md
-walkthrough.md
