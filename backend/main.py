@@ -1,17 +1,24 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import uuid
 import time
 from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from services import store, parser, ai
 from services.database import init_db
 from services.auth import get_current_user_id
 
 load_dotenv()
 
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="ReadWise API")
+app.state.limiter = limiter
 
 # CORS Configuration - Allow frontend to make requests
 app.add_middleware(
@@ -21,6 +28,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Custom rate limit error handler
+@app.exception_handler(RateLimitExceeded)
+async def custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": "Rate limit exceeded. Please wait a moment before trying again.",
+            "retry_after": "Please wait a few minutes"
+        }
+    )
 
 @app.on_event("startup")
 def on_startup():
@@ -118,7 +136,9 @@ def process_book_background(book_id: str, chapters_data: list, book_title: str, 
 
 # API endpoint to upload a book
 @app.post("/books", response_model=Book)
+@limiter.limit("5/hour")  # Most restrictive - expensive AI processing
 async def upload_book(
+    request: Request,
     background_tasks: BackgroundTasks, 
     file: UploadFile = File(...),
     current_user_id: str = Depends(get_current_user_id)
@@ -166,7 +186,8 @@ async def upload_book(
 
 # API endpoint to list all books
 @app.get("/books", response_model=List[Book])
-async def list_books():
+@limiter.limit("60/hour")  # General browsing
+async def list_books(request: Request):
     """
     List all uploaded books with their overview data.
     """
@@ -176,7 +197,8 @@ async def list_books():
 
 # API endpoint to delete a book
 @app.delete("/books/{book_id}")
-async def delete_book(book_id: str):
+@limiter.limit("20/hour")  # Cleanup operations
+async def delete_book(request: Request, book_id: str):
     """
     Delete a book and all its chapters.
     """
@@ -188,7 +210,8 @@ async def delete_book(book_id: str):
 
 # API endpoint to get a specific book
 @app.get("/books/{book_id}", response_model=Book)
-async def get_book(book_id: str):
+@limiter.limit("60/hour")  # Viewing individual books
+async def get_book(request: Request, book_id: str):
     """
     Get detailed information about a specific book including overview data.
     """
@@ -200,7 +223,8 @@ async def get_book(book_id: str):
 
 # API endpoint to get all chapters of a book
 @app.get("/books/{book_id}/chapters", response_model=List[Chapter])
-async def get_book_chapters(book_id: str):
+@limiter.limit("30/hour")  # Chapter listing
+async def get_book_chapters(request: Request, book_id: str):
     """
     Get all chapters for a book with their summaries, key points, and questions.
     Does not include the full chapter text.
@@ -213,7 +237,8 @@ async def get_book_chapters(book_id: str):
 
 # API endpoint to get a specific chapter with full text
 @app.get("/books/{book_id}/chapters/{chapter_index}", response_model=ChapterDetail)
-async def get_chapter_detail(book_id: str, chapter_index: int):
+@limiter.limit("30/hour")  # Reading chapters
+async def get_chapter_detail(request: Request, book_id: str, chapter_index: int):
     """
     Get full details for a specific chapter including the chapter text.
     """

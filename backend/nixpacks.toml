@@ -1,8 +1,16 @@
+[env]
+PORT = "8000"
+
 [phases.setup]
-nixPkgs = ["python311"]
+# Use Python 3.11 and ensure pip is available
+python = "3.11"
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+# Install dependencies from requirements.txt
+cmds = [
+  "pip install --no-cache-dir -r requirements.txt"
+]
 
 [start]
+# Start the FastAPI app
 cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"
